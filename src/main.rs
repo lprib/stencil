@@ -1,4 +1,6 @@
-use std::{collections::HashMap, fs, io::ErrorKind, io::Write, path::Path, path::PathBuf};
+use std::{
+    collections::HashMap, ffi::OsStr, fs, io::ErrorKind, io::Write, path::Path, path::PathBuf,
+};
 
 use clap::{App, Arg};
 use fs::{File, OpenOptions};
@@ -62,6 +64,7 @@ fn main_err() -> Result<(), String> {
         .arg(Arg::with_name("verbose").short("v").help("verbose output"))
         .get_matches();
 
+    //todo look in directories for config or form command line arg
     let config_folder = Path::new("/home/liam/programming/stencil/testing/");
     let config_file_path = {
         let mut buf = config_folder.to_path_buf();
@@ -185,12 +188,24 @@ fn backup_files(config: &Config, config_folder: &Path) -> Result<(), String> {
     }?;
 
     for file in &config.files {
-        let file_path = Path::new(&file.path);
+        let file_path = Path::new(&file.path)
+            .canonicalize()
+            .map_err(display_io_error)?;
         let mut backup_path = backup_folder.clone();
-        backup_path.push(file_path.file_name().ok_or(format!(
-            "`{}` is not a correctly formatted file path",
-            file_path.display()
-        ))?);
+        let new_file_name = file_path
+            .iter()
+            .skip(1)
+            .map(|osstr| {
+                osstr.to_str().ok_or(format!(
+                    "`{}` is not a correctly formatted file path",
+                    file_path.display()
+                ))
+            })
+            .collect::<Result<Vec<&str>, String>>()?
+            .join(".");
+
+        dbg!(&new_file_name);
+        backup_path.push(&new_file_name);
 
         fs::copy(file_path, backup_path).map_err(display_io_error)?;
     }
