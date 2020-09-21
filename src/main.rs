@@ -1,5 +1,6 @@
 use std::{
-    collections::HashMap, ffi::OsStr, fs, io::ErrorKind, io::Write, path::Path, path::PathBuf,
+    collections::HashMap, ffi::OsStr, fs, io::ErrorKind, io::Write, ops::Deref, path::Path,
+    path::PathBuf,
 };
 
 use clap::{App, Arg};
@@ -24,7 +25,8 @@ struct Config {
 
 #[derive(Deserialize, Debug)]
 struct TemplatedFile {
-    path: String,
+    #[serde(rename = "path")]
+    output_path: String,
     template: String,
 }
 
@@ -65,26 +67,32 @@ fn main_err() -> Result<(), String> {
         .get_matches();
 
     //todo look in directories for config or form command line arg
-    let config_folder = Path::new("/home/liam/programming/stencil/testing/");
-    let config_file_path = {
+    //folder where all templates, backups, and config.toml live
+    let config_folder = Path::new(
+        matches
+            .value_of("config")
+            .unwrap_or("/home/liam/programming/stencil/testing/"),
+    );
+    let config_toml_path = {
         let mut buf = config_folder.to_path_buf();
         buf.push("config.toml");
         buf
     };
 
-    let config_string = fs::read_to_string(&config_file_path).map_err(display_io_error)?;
-    let config: Config = toml::from_str(&config_string)
-        .map_err(|e| config_error_display(e, config_file_path.as_os_str().to_str().unwrap()))?;
+    let config_toml_string = fs::read_to_string(&config_toml_path).map_err(display_io_error)?;
+    let config: Config = toml::from_str(&config_toml_string)
+        .map_err(|e| config_error_display(e, config_toml_path.as_os_str().to_str().unwrap()))?;
 
     if let Some(set_name) = matches.value_of("run") {
         if !config.sets.contains_key(set_name) {
             return Err(format!(
                 "Set `{}` not defined in config\nThe available sets are: {}",
                 set_name,
+                // join available sets to string
                 config
                     .sets
                     .keys()
-                    .map(|k| &**k)
+                    .map(Deref::deref)
                     .collect::<Vec<&str>>()
                     .join(", ")
             ));
@@ -98,6 +106,7 @@ fn main_err() -> Result<(), String> {
 
         for file in &config.files {
             match replace_file(file, &config, &set_name, &replace_regex, config_folder) {
+                // dont abort program on error, just continue to next file
                 Err(e) => println!("{}", e),
                 _ => {}
             }
@@ -114,7 +123,6 @@ fn get_replacement_regex(config: &Config) -> Regex {
         regex::escape(&config.before),
         regex::escape(&config.after)
     );
-    dbg!(&regex_string);
     Regex::new(&regex_string).unwrap()
 }
 
@@ -132,12 +140,13 @@ fn replace_file(
         buf.push(&file.template);
         buf
     };
-    let file_string = fs::read_to_string(&template_path).map_err(display_io_error)?;
-    let mut new_string = String::new();
+    let template_string = fs::read_to_string(&template_path).map_err(display_io_error)?;
+    let mut output_string = String::new();
 
-    // the index of the tail after the last previous match
+    // the index of the tail after the previous match
     let mut tail_idx = 0;
-    for captures in regex.captures_iter(&file_string) {
+    for captures in regex.captures_iter(&template_string) {
+        // full_match includes the template-before and template-after strings
         let full_match = captures.get(0).unwrap();
         let inner_match = captures.get(1).unwrap();
         let replace_str = set.get(inner_match.as_str()).ok_or(format!(
@@ -147,22 +156,21 @@ fn replace_file(
             set_name
         ))?;
 
-        new_string.push_str(&file_string[tail_idx..full_match.start()]);
-        new_string.push_str(replace_str);
+        output_string.push_str(&template_string[tail_idx..full_match.start()]);
+        output_string.push_str(replace_str);
 
         tail_idx = full_match.end();
     }
 
-    new_string.push_str(&file_string[tail_idx..]);
+    output_string.push_str(&template_string[tail_idx..]);
 
-    dbg!(&file.path);
     let mut output_file = OpenOptions::new()
         .create(true)
         .write(true)
-        .open(&file.path)
+        .open(&file.output_path)
         .map_err(display_io_error)?;
     output_file
-        .write_all(new_string.as_bytes())
+        .write_all(output_string.as_bytes())
         .map_err(display_io_error)?;
 
     Ok(())
@@ -178,7 +186,7 @@ fn backup_files(config: &Config, config_folder: &Path) -> Result<(), String> {
     match fs::create_dir(&backup_folder) {
         Err(e) => {
             if let ErrorKind::AlreadyExists = e.kind() {
-                //alllow error if directory already exists, else throw error
+                //alllow error if directory already exists, otherwise throw error
                 Ok(())
             } else {
                 Err(String::from("Failed to create backup directory"))
@@ -188,12 +196,13 @@ fn backup_files(config: &Config, config_folder: &Path) -> Result<(), String> {
     }?;
 
     for file in &config.files {
-        let file_path = Path::new(&file.path)
+        let file_path = Path::new(&file.output_path)
             .canonicalize()
             .map_err(display_io_error)?;
         let mut backup_path = backup_folder.clone();
         let new_file_name = file_path
             .iter()
+            // skip the "/" at the start of canonicalized name
             .skip(1)
             .map(|osstr| {
                 osstr.to_str().ok_or(format!(
@@ -203,8 +212,6 @@ fn backup_files(config: &Config, config_folder: &Path) -> Result<(), String> {
             })
             .collect::<Result<Vec<&str>, String>>()?
             .join(".");
-
-        dbg!(&new_file_name);
         backup_path.push(&new_file_name);
 
         fs::copy(file_path, backup_path).map_err(display_io_error)?;
