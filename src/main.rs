@@ -57,7 +57,7 @@ fn main() {
 
 fn main_err() -> Result<(), String> {
     let matches = App::new("Stencil")
-        .version("0.1")
+        .version("1.0")
         .author("Liam Pribis <jackpribis@gmail.com>")
         .about("System-wide templater")
         .setting(AppSettings::ArgRequiredElseHelp)
@@ -89,7 +89,12 @@ fn main_err() -> Result<(), String> {
                 .conflicts_with("verbose")
                 .help("supress output"),
         )
-        .arg(Arg::with_name("verbose").short("v").help("verbose output"))
+        .arg(
+            Arg::with_name("verbose")
+                .short("v")
+                .long("verbose")
+                .help("verbose output"),
+        )
         .get_matches();
 
     LOG_LEVEL

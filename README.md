@@ -4,7 +4,7 @@ Stencil is a templating program allowing multiple files to be updated according 
 
 ```console
 user@name ~ $ stencil --help
-Stencil 0.1
+Stencil 1.0
 Liam Pribis <jackpribis@gmail.com>
 System-wide templater
 
@@ -16,7 +16,7 @@ FLAGS:
         --list-sets    list the replacement sets in the current config file
     -q, --quiet        supress output
     -V, --version      Prints version information
-    -v                 verbose output
+    -v, --verbose      verbose output
 
 OPTIONS:
     -c, --config <CONFIG_DIR_PATH>    set the path of the configuration directory
@@ -63,3 +63,6 @@ key-n = "value n"
 * **name**: *string*, the name of this replacement set, used in file whitelists and when running `stencil -r <NAME>`
 * **whitelist-only**: *optional boolean*, if this option is set to `true`, this replacement set will only apply to files that have specifically whitelisted this replacement set. Otherwise it will be applied to any file that either whitelists it or has no specified whitelist. If not present, it defaults to `false`.
 * **key/value pairs**: *string to string map*, defines which names in a template will be substituted for which vales.
+  
+## Backups
+To help guard against malformed template files, stencil can optionally back up all files to be templated before they are edited. Backups are saved in `$CONFIG_DIRECTORY/backup/`, and are names based on a files full path. For example, the file `/home/user/Documents/file.txt` will be saved as `$CONFIG_DIRECTORY/backup/home.user.Documents.file.txt`. This naming allows for differentiation of multiple files (eg. if many files have the name `config`). Backups can be turned off by setting `backup = false` in the `config.toml`.
