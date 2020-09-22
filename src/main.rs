@@ -78,7 +78,7 @@ fn main_err() -> Result<(), String> {
                 .long("config")
                 .short("c")
                 .help("set the path of the configuration directory")
-                .value_name("CONFIG_PATH")
+                .value_name("CONFIG_DIR_PATH")
                 .takes_value(true),
         )
         .arg(
@@ -101,13 +101,8 @@ fn main_err() -> Result<(), String> {
         })
         .unwrap();
 
-    //todo look in directories for config or form command line arg
     //folder where all templates, backups, and config.toml live
-    let config_folder = Path::new(
-        matches
-            .value_of("config")
-            .unwrap_or("/home/liam/programming/stencil/testing/"),
-    );
+    let config_folder = Path::new(matches.value_of("config").unwrap_or("."));
     log(
         format!(
             "using configuration directory `{}`",

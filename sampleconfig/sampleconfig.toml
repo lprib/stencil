@@ -1,6 +1,5 @@
 template-after = ")"
 template-before = "!TEMPLATE("
-
 [[file]]
 # path = "/home/liam/.config/i3/config"
 path = "/home/liam/.config/i3/config"
@@ -14,6 +13,10 @@ template = "rofi.template"
 [[file]]
 path = "/home/liam/.config/xfce4/terminal/terminalrc"
 template = "xfce4-terminal.template"
+
+[[file]]
+path = "/home/liam/programming/stencil/testing/test.txt"
+template = "test.template"
 
 [set.grey]
 dark-bg = "1a1a1a"
