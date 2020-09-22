@@ -28,6 +28,8 @@ struct TemplatedFile {
     #[serde(rename = "path")]
     output_path: String,
     template: String,
+    #[serde(rename = "whitelist")]
+    whitelisted_sets: Option<Vec<String>>,
 }
 #[derive(Debug, PartialOrd, PartialEq)]
 enum LogLevel {
@@ -145,6 +147,18 @@ fn main_err() -> Result<(), String> {
         let replace_regex = get_replacement_regex(&config);
 
         for file in &config.files {
+            if let Some(ref whitelist) = file.whitelisted_sets {
+                if !whitelist.iter().any(|set| set == set_name) {
+                    log(
+                        format!(
+                            "set `{}` is  not whitelisted for file `{}`, skipping",
+                            set_name, file.output_path
+                        ),
+                        LogLevel::Trace,
+                    );
+                    continue;
+                }
+            }
             match replace_file(file, &config, &set_name, &replace_regex, config_folder) {
                 // dont abort program on error, just continue to next file
                 Err(e) => log(e, LogLevel::Warn),
@@ -215,6 +229,7 @@ fn replace_file(
     let mut output_file = OpenOptions::new()
         .create(true)
         .write(true)
+        .truncate(true)
         .open(&file.output_path)
         .map_err(display_io_error)?;
     output_file
