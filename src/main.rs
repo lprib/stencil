@@ -18,9 +18,17 @@ struct Config {
     #[serde(rename = "file")]
     files: Vec<TemplatedFile>,
     #[serde(rename = "set")]
-    sets: HashMap<String, HashMap<String, String>>,
+    sets: HashMap<String, ReplacementSet>,
     #[serde(default = "default_backup_value")]
     backup: bool,
+}
+
+#[derive(Deserialize, Debug)]
+struct ReplacementSet {
+    #[serde(rename = "whitelist-only", default = "default_whitelist_only")]
+    whitelist_only: bool,
+    #[serde(flatten)]
+    mapping: HashMap<String, String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -146,6 +154,9 @@ fn main_err() -> Result<(), String> {
 
         let replace_regex = get_replacement_regex(&config);
 
+        // unwrapping here is ok because it is checked above
+        let whitelist_only = config.sets.get(set_name).unwrap().whitelist_only;
+
         for file in &config.files {
             if let Some(ref whitelist) = file.whitelisted_sets {
                 if !whitelist.iter().any(|set| set == set_name) {
@@ -158,7 +169,18 @@ fn main_err() -> Result<(), String> {
                     );
                     continue;
                 }
+            } else if whitelist_only {
+                // there is no whitelist for file, but the set requires whitelists only, so skip
+                log(
+                    format!(
+                        "set `{}` requires whitelist only, but `{}` does not specify a whitelist, skipping",
+                        set_name, file.output_path
+                    ),
+                LogLevel::Trace
+                );
+                continue;
             }
+
             match replace_file(file, &config, &set_name, &replace_regex, config_folder) {
                 // dont abort program on error, just continue to next file
                 Err(e) => log(e, LogLevel::Warn),
@@ -211,7 +233,7 @@ fn replace_file(
         // full_match includes the template-before and template-after strings
         let full_match = captures.get(0).unwrap();
         let inner_match = captures.get(1).unwrap();
-        let replace_str = set.get(inner_match.as_str()).ok_or(format!(
+        let replace_str = set.mapping.get(inner_match.as_str()).ok_or(format!(
             "in file `{}`:\ncould not find key `{}` in set `{}`\naborting for this file",
             template_path.to_str().unwrap_or("<non-utf8 filename>"),
             inner_match.as_str(),
@@ -308,13 +330,17 @@ fn default_backup_value() -> bool {
     true
 }
 
+fn default_whitelist_only() -> bool {
+    false
+}
+
 fn display_io_error(e: std::io::Error) -> String {
     format!("{}", e)
 }
 
 #[inline]
 fn log(message: String, level: LogLevel) {
-    if &level >= LOG_LEVEL.get().unwrap() {
+    if &level <= LOG_LEVEL.get().unwrap() {
         println!("[{}] {}", level, message);
     }
 }
