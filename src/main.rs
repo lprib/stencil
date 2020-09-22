@@ -2,7 +2,7 @@ use std::{
     collections::HashMap, fmt::Display, fs, io::ErrorKind, io::Write, ops::Deref, path::Path,
 };
 
-use clap::{App, Arg};
+use clap::{App, AppSettings, Arg};
 use fs::OpenOptions;
 use once_cell::sync::OnceCell;
 use regex::Regex;
@@ -60,6 +60,7 @@ fn main_err() -> Result<(), String> {
         .version("0.1")
         .author("Liam Pribis <jackpribis@gmail.com>")
         .about("System-wide templater")
+        .setting(AppSettings::ArgRequiredElseHelp)
         .arg(
             Arg::with_name("run")
                 .long("run")
