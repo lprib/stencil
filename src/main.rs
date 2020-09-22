@@ -1,10 +1,10 @@
 use std::{
-    collections::HashMap, ffi::OsStr, fs, io::ErrorKind, io::Write, ops::Deref, path::Path,
-    path::PathBuf,
+    collections::HashMap, fmt::Display, fs, io::ErrorKind, io::Write, ops::Deref, path::Path,
 };
 
 use clap::{App, Arg};
-use fs::{File, OpenOptions};
+use fs::OpenOptions;
+use once_cell::sync::OnceCell;
 use regex::Regex;
 use serde::Deserialize;
 use toml::de::Error;
@@ -29,10 +29,18 @@ struct TemplatedFile {
     output_path: String,
     template: String,
 }
+#[derive(Debug, PartialOrd, PartialEq)]
+enum LogLevel {
+    None,
+    Warn,
+    Trace,
+}
+
+static LOG_LEVEL: OnceCell<LogLevel> = OnceCell::new();
 
 fn main() {
     match main_err() {
-        Err(e) => println!("{}", e),
+        Err(e) if LOG_LEVEL.get().unwrap() > &LogLevel::None => println!("[Error] {}", e),
         _ => {}
     }
 }
@@ -63,8 +71,25 @@ fn main_err() -> Result<(), String> {
                 .value_name("CONFIG_PATH")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("quiet")
+                .long("quiet")
+                .short("q")
+                .conflicts_with("verbose")
+                .help("supress output"),
+        )
         .arg(Arg::with_name("verbose").short("v").help("verbose output"))
         .get_matches();
+
+    LOG_LEVEL
+        .set(if matches.is_present("verbose") {
+            LogLevel::Trace
+        } else if matches.is_present("quiet") {
+            LogLevel::None
+        } else {
+            LogLevel::Warn
+        })
+        .unwrap();
 
     //todo look in directories for config or form command line arg
     //folder where all templates, backups, and config.toml live
@@ -73,6 +98,14 @@ fn main_err() -> Result<(), String> {
             .value_of("config")
             .unwrap_or("/home/liam/programming/stencil/testing/"),
     );
+    log(
+        format!(
+            "using configuration directory `{}`",
+            config_folder.display()
+        ),
+        LogLevel::Trace,
+    );
+
     let config_toml_path = {
         let mut buf = config_folder.to_path_buf();
         buf.push("config.toml");
@@ -82,6 +115,13 @@ fn main_err() -> Result<(), String> {
     let config_toml_string = fs::read_to_string(&config_toml_path).map_err(display_io_error)?;
     let config: Config = toml::from_str(&config_toml_string)
         .map_err(|e| config_error_display(e, config_toml_path.as_os_str().to_str().unwrap()))?;
+
+    if matches.is_present("list-sets") {
+        for set_name in config.sets.keys() {
+            println!("{}", set_name);
+        }
+        return Ok(());
+    }
 
     if let Some(set_name) = matches.value_of("run") {
         if !config.sets.contains_key(set_name) {
@@ -107,7 +147,7 @@ fn main_err() -> Result<(), String> {
         for file in &config.files {
             match replace_file(file, &config, &set_name, &replace_regex, config_folder) {
                 // dont abort program on error, just continue to next file
-                Err(e) => println!("{}", e),
+                Err(e) => log(e, LogLevel::Warn),
                 _ => {}
             }
         }
@@ -133,6 +173,14 @@ fn replace_file(
     regex: &Regex,
     config_folder: &Path,
 ) -> Result<(), String> {
+    log(
+        format!(
+            "building file `{}` from template `{}`",
+            file.output_path, file.template
+        ),
+        LogLevel::Trace,
+    );
+
     // ok to unwrap because key existence is already checked in caller
     let set = config.sets.get(set_name).unwrap();
     let template_path = {
@@ -150,7 +198,7 @@ fn replace_file(
         let full_match = captures.get(0).unwrap();
         let inner_match = captures.get(1).unwrap();
         let replace_str = set.get(inner_match.as_str()).ok_or(format!(
-            "in file `{}`:\ncould not find key {} in set {}\naborting for this file",
+            "in file `{}`:\ncould not find key `{}` in set `{}`\naborting for this file",
             template_path.to_str().unwrap_or("<non-utf8 filename>"),
             inner_match.as_str(),
             set_name
@@ -214,6 +262,15 @@ fn backup_files(config: &Config, config_folder: &Path) -> Result<(), String> {
             .join(".");
         backup_path.push(&new_file_name);
 
+        log(
+            format!(
+                "Backing up `{}` into `{}`",
+                &file.output_path,
+                backup_path.display()
+            ),
+            LogLevel::Trace,
+        );
+
         fs::copy(file_path, backup_path).map_err(display_io_error)?;
     }
 
@@ -238,4 +295,21 @@ fn default_backup_value() -> bool {
 
 fn display_io_error(e: std::io::Error) -> String {
     format!("{}", e)
+}
+
+#[inline]
+fn log(message: String, level: LogLevel) {
+    if &level >= LOG_LEVEL.get().unwrap() {
+        println!("[{}] {}", level, message);
+    }
+}
+
+impl Display for LogLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => write!(f, "None"),
+            Self::Warn => write!(f, "Warn"),
+            Self::Trace => write!(f, "Trace"),
+        }
+    }
 }

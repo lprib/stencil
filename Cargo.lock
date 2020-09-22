@@ -78,6 +78,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3728d817d99e5ac407411fa471ff9800a778d88a24685968b36824eaf4bee400"
 
 [[package]]
+name = "once_cell"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "260e51e7efe62b592207e9e13a68e43692a7a279171d6ba57abd208bf23645ad"
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -138,6 +144,7 @@ name = "stencil"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "once_cell",
  "regex",
  "serde",
  "toml",
