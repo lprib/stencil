@@ -1,13 +1,16 @@
 use std::{
     collections::HashMap, fmt::Display, fs, io::ErrorKind, io::Write, ops::Deref, path::Path,
+    path::PathBuf,
 };
 
-use clap::{App, AppSettings, Arg};
+use clap::{App, AppSettings, Arg, ArgMatches};
 use fs::OpenOptions;
 use once_cell::sync::OnceCell;
 use regex::Regex;
 use serde::Deserialize;
 use toml::de::Error;
+
+type StringResult<T = ()> = Result<T, String>;
 
 #[derive(Deserialize, Debug)]
 struct Config {
@@ -48,6 +51,7 @@ enum LogLevel {
 
 static LOG_LEVEL: OnceCell<LogLevel> = OnceCell::new();
 
+/// Handle errors based on the loglevel in the real main function, `main_err`
 fn main() {
     match main_err() {
         Err(e) if LOG_LEVEL.get().unwrap() > &LogLevel::None => println!("[Error] {}", e),
@@ -55,8 +59,90 @@ fn main() {
     }
 }
 
-fn main_err() -> Result<(), String> {
-    let matches = App::new("Stencil")
+/// The main logic of stencil
+fn main_err() -> StringResult {
+    let matches = get_cli_args();
+
+    LOG_LEVEL
+        .set(if matches.is_present("verbose") {
+            LogLevel::Trace
+        } else if matches.is_present("quiet") {
+            LogLevel::None
+        } else {
+            LogLevel::Warn
+        })
+        .unwrap();
+
+    let (config_folder, config) = get_config(&matches)?;
+
+    if matches.is_present("list-sets") {
+        for set_name in config.sets.keys() {
+            println!("{}", set_name);
+        }
+        return Ok(());
+    }
+
+    if let Some(set_name) = matches.value_of("run") {
+        if !config.sets.contains_key(set_name) {
+            return Err(format!(
+                "Set `{}` not defined in config\nThe available sets are: {}",
+                set_name,
+                // join available sets to string
+                config
+                    .sets
+                    .keys()
+                    .map(Deref::deref)
+                    .collect::<Vec<&str>>()
+                    .join(", ")
+            ));
+        }
+
+        if config.backup {
+            backup_files(&config, &config_folder)?;
+        }
+
+        let replace_regex = get_replacement_regex(&config);
+
+        // unwrapping here is ok because it is checked above
+        let whitelist_only = config.sets.get(set_name).unwrap().whitelist_only;
+
+        for file in &config.files {
+            if let Some(ref whitelist) = file.whitelisted_sets {
+                if !whitelist.iter().any(|set| set == set_name) {
+                    log(
+                        format!(
+                            "set `{}` is  not whitelisted for file `{}`, skipping",
+                            set_name, file.output_path
+                        ),
+                        LogLevel::Trace,
+                    );
+                    continue;
+                }
+            } else if whitelist_only {
+                // there is no whitelist for file, but the set requires whitelists only, so skip
+                log(
+                    format!(
+                        "set `{}` requires whitelist only, but `{}` does not specify a whitelist, skipping",
+                        set_name, file.output_path
+                    ),
+                LogLevel::Trace
+                );
+                continue;
+            }
+
+            match replace_file(file, &config, &set_name, &replace_regex, &config_folder) {
+                // dont abort program on error, just continue to next file
+                Err(e) => log(e, LogLevel::Warn),
+                _ => {}
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn get_cli_args() -> ArgMatches<'static> {
+    App::new("Stencil")
         .version("1.0")
         .author("Liam Pribis <jackpribis@gmail.com>")
         .about("System-wide templater")
@@ -95,20 +181,13 @@ fn main_err() -> Result<(), String> {
                 .long("verbose")
                 .help("verbose output"),
         )
-        .get_matches();
+        .get_matches()
+}
 
-    LOG_LEVEL
-        .set(if matches.is_present("verbose") {
-            LogLevel::Trace
-        } else if matches.is_present("quiet") {
-            LogLevel::None
-        } else {
-            LogLevel::Warn
-        })
-        .unwrap();
-
+/// returns (config_directory, config) based on cli args and defaults
+fn get_config(matches: &ArgMatches) -> StringResult<(PathBuf, Config)> {
     //folder where all templates, backups, and config.toml live
-    let config_folder = Path::new(matches.value_of("config").unwrap_or("."));
+    let config_folder = PathBuf::from(matches.value_of("config").unwrap_or("."));
     log(
         format!(
             "using configuration directory `{}`",
@@ -118,7 +197,7 @@ fn main_err() -> Result<(), String> {
     );
 
     let config_toml_path = {
-        let mut buf = config_folder.to_path_buf();
+        let mut buf = config_folder.clone();
         buf.push("config.toml");
         buf
     };
@@ -127,89 +206,30 @@ fn main_err() -> Result<(), String> {
     let config: Config = toml::from_str(&config_toml_string)
         .map_err(|e| config_error_display(e, config_toml_path.as_os_str().to_str().unwrap()))?;
 
-    if matches.is_present("list-sets") {
-        for set_name in config.sets.keys() {
-            println!("{}", set_name);
-        }
-        return Ok(());
-    }
-
-    if let Some(set_name) = matches.value_of("run") {
-        if !config.sets.contains_key(set_name) {
-            return Err(format!(
-                "Set `{}` not defined in config\nThe available sets are: {}",
-                set_name,
-                // join available sets to string
-                config
-                    .sets
-                    .keys()
-                    .map(Deref::deref)
-                    .collect::<Vec<&str>>()
-                    .join(", ")
-            ));
-        }
-
-        if config.backup {
-            backup_files(&config, config_folder)?;
-        }
-
-        let replace_regex = get_replacement_regex(&config);
-
-        // unwrapping here is ok because it is checked above
-        let whitelist_only = config.sets.get(set_name).unwrap().whitelist_only;
-
-        for file in &config.files {
-            if let Some(ref whitelist) = file.whitelisted_sets {
-                if !whitelist.iter().any(|set| set == set_name) {
-                    log(
-                        format!(
-                            "set `{}` is  not whitelisted for file `{}`, skipping",
-                            set_name, file.output_path
-                        ),
-                        LogLevel::Trace,
-                    );
-                    continue;
-                }
-            } else if whitelist_only {
-                // there is no whitelist for file, but the set requires whitelists only, so skip
-                log(
-                    format!(
-                        "set `{}` requires whitelist only, but `{}` does not specify a whitelist, skipping",
-                        set_name, file.output_path
-                    ),
-                LogLevel::Trace
-                );
-                continue;
-            }
-
-            match replace_file(file, &config, &set_name, &replace_regex, config_folder) {
-                // dont abort program on error, just continue to next file
-                Err(e) => log(e, LogLevel::Warn),
-                _ => {}
-            }
-        }
-    }
-
-    Ok(())
+    Ok((config_folder, config))
 }
 
+/// Generate a Regex that finds template directives in a string, based on `template-before` and `template-after` in config.toml.
+/// The Regex has a capture group named `key` that returns the text inside the template directive
 fn get_replacement_regex(config: &Config) -> Regex {
     // let after = config.after.as_deref().unwrap_or(" ");
     let regex_string = format!(
-        "{}(.*?){}",
+        "{}(?P<key>.*?){}",
         regex::escape(&config.before),
         regex::escape(&config.after)
     );
     Regex::new(&regex_string).unwrap()
 }
 
+/// Find all templates in a given `TemplatedFile`, replaces them with the true values from `config.toml`,
+/// and saves it back to the files true location.
 fn replace_file(
     file: &TemplatedFile,
     config: &Config,
     set_name: &str,
     regex: &Regex,
     config_folder: &Path,
-) -> Result<(), String> {
+) -> StringResult {
     log(
         format!(
             "building file `{}` from template `{}`",
@@ -233,11 +253,11 @@ fn replace_file(
     for captures in regex.captures_iter(&template_string) {
         // full_match includes the template-before and template-after strings
         let full_match = captures.get(0).unwrap();
-        let inner_match = captures.get(1).unwrap();
-        let replace_str = set.mapping.get(inner_match.as_str()).ok_or(format!(
+        let key_match = captures.name("key").unwrap();
+        let replace_str = set.mapping.get(key_match.as_str()).ok_or(format!(
             "in file `{}`:\ncould not find key `{}` in set `{}`\naborting for this file",
             template_path.to_str().unwrap_or("<non-utf8 filename>"),
-            inner_match.as_str(),
+            key_match.as_str(),
             set_name
         ))?;
 
@@ -262,7 +282,8 @@ fn replace_file(
     Ok(())
 }
 
-fn backup_files(config: &Config, config_folder: &Path) -> Result<(), String> {
+/// Backup all files specified in `config.toml`
+fn backup_files(config: &Config, config_folder: &Path) -> StringResult {
     let backup_folder = {
         let mut buf = config_folder.to_path_buf();
         buf.push("backup");
@@ -315,6 +336,7 @@ fn backup_files(config: &Config, config_folder: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Convert toml parsing errors into a user-readable string for reporting
 fn config_error_display(error: Error, config_path: &str) -> String {
     if let Some((line, col)) = error.line_col() {
         format!(
@@ -326,19 +348,22 @@ fn config_error_display(error: Error, config_path: &str) -> String {
     }
 }
 
-// required for #[serde(default = ...)]
+/// required for #[serde(default = ...)]
 fn default_backup_value() -> bool {
     true
 }
 
+/// required for #[serde(default = ...)]
 fn default_whitelist_only() -> bool {
     false
 }
 
+/// Convert io::Error to String
 fn display_io_error(e: std::io::Error) -> String {
     format!("{}", e)
 }
 
+/// Print a log message only if the defined LogLevel is high enough
 #[inline]
 fn log(message: String, level: LogLevel) {
     if &level <= LOG_LEVEL.get().unwrap() {
